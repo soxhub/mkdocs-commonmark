@@ -1,0 +1,6 @@
+[submodule "deps/markdown"]
+	path = deps/markdown
+	url = https://github.com/Python-Markdown/markdown.git
+[submodule "deps/mistletoe"]
+	path = deps/mistletoe
+	url = https://github.com/miyuchina/mistletoe.git

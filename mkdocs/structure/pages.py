@@ -15,6 +15,10 @@ from markdown.util import AMP_SUBSTITUTE
 from mkdocs.structure.toc import get_toc
 from mkdocs.utils import meta, urlparse, urlunparse, urljoin, urlunquote, get_markdown_title, warning_filter
 
+from mistletoe import Document
+from mkdocs._mistletoe_interop import MarkdownInterop, ETreeRenderer
+from markdown.util import etree
+
 log = logging.getLogger(__name__)
 log.addFilter(warning_filter)
 
@@ -179,11 +183,17 @@ class Page(object):
             _RelativePathExtension(self.file, files)
         ] + config['markdown_extensions']
 
-        md = markdown.Markdown(
+        md = MarkdownInterop(
             extensions=extensions,
             extension_configs=config['mdx_configs'] or {}
         )
-        self.content = md.convert(self.markdown)
+
+        with ETreeRenderer() as r:
+            preprocessed = md._run_preprocessors(self.markdown)
+            doc = r.render(Document(preprocessed)).getroot()
+
+        self.content = md._convert_from_elem(doc)
+
         self.toc = get_toc(getattr(md, 'toc', ''))
 
 

@@ -1,0 +1,14 @@
+[[source]]
+name = "pypi"
+url = "https://pypi.org/simple"
+verify_ssl = true
+
+[dev-packages]
+
+[packages]
+mkdocs = {editable = true,path = "."}
+mistletoe = {editable = true,path = "deps/mistletoe"}
+markdown = {editable = true,path = "deps/markdown"}
+
+[requires]
+python_version = "3.7"
