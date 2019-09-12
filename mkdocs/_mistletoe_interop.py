@@ -17,12 +17,31 @@ else:
 
 import markdown
 from markdown import util
-from markdown.util import etree, AtomicString
+from markdown.util import etree, text_type, AtomicString
 from mistletoe import Document
 
 def splice(x):
     # unfortunately, str is iterable
     if (isinstance(x, util.text_type) or
+        # fortunately, Element is iterable but has no __iter__
+        getattr(x, '__iter__', None) is None):
+        yield x
+    else:
+        for t in x:
+            yield from splice(t)
+
+def safe_concat(a, b):
+    ''' to deal with cases when a is None '''
+    if isinstance(a, AtomicString):
+        return AtomicString(a + b)
+    else:
+        # otherwise a is str-like or none
+        return (a or '') + b
+
+
+def splice(x):
+    # unfortunately, str is iterable
+    if (isinstance(x, text_type) or
         # fortunately, Element is iterable but has no __iter__
         getattr(x, '__iter__', None) is None):
         yield x
@@ -87,13 +106,18 @@ class ETreeRenderer(BaseRenderer):
             yield x
 
     def append_newline_inside(self, el):
-        if len(el):
+        # is it non-empty?
+        if el:
             if el[-1].tail is None:
                 el[-1].tail = AtomicString('\n')
             elif isinstance(el[-1].tail, AtomicString):
                 el[-1].tail = AtomicString(el[-1].tail + '\n')
             else:
                 el[-1].tail += '\n'
+        # does it have text?
+        elif el.text:
+            el.text += '\n'
+        # absolutely nothing, do nothing
         return el
 
     def append_elems(self, el, inner):
@@ -112,18 +136,18 @@ class ETreeRenderer(BaseRenderer):
                 # must be an etree.Element
                 if buf:
                     if prev is None:
-                        el.text = (el.text or '') + buf
+                        el.text = safe_concat(el.text, buf)
                     else:
-                        prev.tail = (prev.tail or '') + buf
+                        prev.tail = safe_concat(prev.tail, buf)
                     buf = ''
                 el.append(t)
                 prev = t
 
         if buf:
             if prev is None:
-                el.text = (el.text or '') + buf
+                el.text = safe_concat(el.text, buf)
             else:
-                prev.tail = (prev.tail or '') + buf
+                prev.tail = safe_concat(prev.tail, buf)
 
         return el
 
@@ -137,7 +161,8 @@ class ETreeRenderer(BaseRenderer):
 
     def render_inline_code(self, token):
         el = etree.Element('code')
-        el.text = AtomicString(html.escape(token.children[0].content, quote=False))
+        el.text = AtomicString(html.escape(token.children[0].content)
+            .replace('&#x27;', "'"))
         return el
 
     def render_strikethrough(self, token):
@@ -145,6 +170,9 @@ class ETreeRenderer(BaseRenderer):
         return self.append_elems(el, self.render_inner(token))
 
     def render_image(self, token):
+        # note that the attributes are sorted before output HTML,
+        # NOT by the order specified. annoying when taking diffs,
+        # requiring a customized HTML serializer
         el = etree.Element('img', src=token.src, alt=self.render_to_plain(token))
         if token.title:
             el.set('title', self.escape_html(token.title))
@@ -188,6 +216,10 @@ class ETreeRenderer(BaseRenderer):
         self._suppress_ptag_stack.append(False)
         self.append_elems(el, self.render_inner_join(token))
         self.append_newline_inside(el)
+        # remove duplicate newlines, dealing with empty blockquote, e.g.
+        # test #202: '>\n' -> '<blockquote>\n</blockquote>\n'
+        if not el and el.text == '\n\n':
+            el.text = AtomicString('\n')
         self._suppress_ptag_stack.pop()
         return el
 
@@ -206,7 +238,10 @@ class ETreeRenderer(BaseRenderer):
             el_code.set('class', 'language-{}'.format(self.escape_html(token.language)))
         # to comply with the format using in PythonMarkdown.
         # or it may break in plugins like codehilite!!
-        code_text = html.escape(token.children[0].content, quote=False)
+        code_text = (html.escape(token.children[0].content)
+            .replace('&#x27;', "'")
+            # FIXME: breaks commonmark test suite #176
+            .replace('&quot;', '"'))
         # protect inside content from being interpreted
         el_code.text = AtomicString(code_text)
         return el_pre
@@ -230,27 +265,22 @@ class ETreeRenderer(BaseRenderer):
 
     def render_list_item(self, token):
         el = etree.Element('li')
-        if len(token.children) == 0:
+        if not token.children:
             return el
 
-        self.append_elems(el, self.render_inner_join(token))
-
-        # to be less confusing, the original control flow is kept,
+        # to be less confusing, the original control flow is retained,
         # and manipulations are kept as comments
+        inner = ['\n', self.render_inner_join(token), '\n']
         # inner_template = '\n{}\n'
         if self._suppress_ptag_stack[-1]:
             if token.children[0].__class__.__name__ == 'Paragraph':
                 # inner_template = inner_template[1:]
-                pass
-            else:
-                # leaving trailing newline
-                self.append_newline_inside(el)
+                inner = inner[1:]
             if token.children[-1].__class__.__name__ == 'Paragraph':
                 # inner_template = inner_template[:-1]
-                pass
-            else:
-                # leaving leading newline
-                el.text = '\n'
+                inner = inner[:-1]
+
+        self.append_elems(el, inner)
 
         return el
 
@@ -340,6 +370,18 @@ class MarkdownInterop(markdown.Markdown):
         # XXX: change to allow only selected built-in pre-processors
         self.preprocessors.deregister('normalize_whitespace')
         self.preprocessors.deregister('html_block')
+        # will prevent mistletoe's detection from working when
+        # CodeHilite is NOT used.
+        # it is garentreed to have been registered by mkdocs,
+        # so the slient option is not required
+        from markdown.extensions.codehilite import CodeHiliteExtension
+        codehilite = False
+        for ext in self.registeredExtensions:
+            if isinstance(ext, CodeHiliteExtension):
+                codehilite_found = True
+                break
+        else:
+            self.preprocessors.deregister('fenced_code_block')
 
     def _convert_to_elem(self, source):
         ''' Run the convert step until block parsing is done.
@@ -375,7 +417,7 @@ class MarkdownInterop(markdown.Markdown):
             # because we don't use the default normalizing preprocessor,
             # note the edge case that footnote plugin complains if the
             # document turns out to be empty
-            if not len(self.lines):
+            if not self.lines:
                 self.lines.append('')
         if concat:
             return '\n'.join(self.lines)
