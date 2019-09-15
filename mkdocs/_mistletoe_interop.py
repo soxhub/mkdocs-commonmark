@@ -18,7 +18,14 @@ else:
 import markdown
 from markdown import util
 from markdown.util import etree, text_type, AtomicString
-from mistletoe import Document
+
+from mistletoe import Document, span_token
+from mistletoe.block_token import tokenize, _token_types
+from mistletoe.block_tokenizer import tokenize_block, make_tokens
+
+
+mistletoe_block_tokens = {x.__name__: x for x in _token_types}
+
 
 def splice(x):
     # unfortunately, str is iterable
@@ -50,6 +57,34 @@ def splice(x):
             yield from splice(t)
 
 
+class DocumentLazy(Document):
+    def __init__(self, lines, *, root_tag='div'):
+        self.root_tag = root_tag
+
+        if isinstance(lines, str):
+            lines = lines.splitlines(keepends=True)
+        self._lines = [line if line.endswith('\n') else '{}\n'.format(line) for line in lines]
+        self.footnotes = {}
+
+    def run_block(self, block_token_types):
+        # wow, a mutable global variable, so impressive...
+        global _root_node
+        _root_node = self
+        self._blocks = tokenize_block(self._lines, block_token_types)
+        _root_node = None
+        return self._blocks
+
+    def run_inline(self):
+        try:
+            _blocks = self._blocks
+        except KeyError:
+            raise Exception('Should call run_block first')
+        span_token._root_node = self
+        self.children = make_tokens(_blocks)
+        span_token._root_node = None
+        return self.children
+
+
 class ETreeRenderer(BaseRenderer):
     """
     ElementTree renderer class.
@@ -63,6 +98,10 @@ class ETreeRenderer(BaseRenderer):
         """
         self._suppress_ptag_stack = [False]
         super().__init__(*chain((HTMLBlock, HTMLSpan), extras))
+        self.render_map.update({
+            'DocumentLazy': self.render_document,
+        })
+
         # html.entities.html5 includes entitydefs not ending with ';',
         # CommonMark seems to hate them, so...
         self._stdlib_charref = html._charref
@@ -346,7 +385,7 @@ class ETreeRenderer(BaseRenderer):
     def render_document(self, token):
         self.footnotes.update(token.footnotes)
         # python-markdown recognizes and strips *this* hardcoded <div>
-        el = etree.Element('div')
+        el = etree.Element(token.root_tag)
         self.append_elems(el, self.render_inner_join(token))
         self.append_newline_inside(el)
         elt = etree.ElementTree(el)
@@ -370,15 +409,16 @@ class MarkdownInterop(markdown.Markdown):
         # XXX: change to allow only selected built-in pre-processors
         self.preprocessors.deregister('normalize_whitespace')
         self.preprocessors.deregister('html_block')
-        # will prevent mistletoe's detection from working when
-        # CodeHilite is NOT used.
+        # fenced code blocks are stashed at preprocessing when CodeHilite
+        # is NOT used, and thus hiding these blocks from mistletoe, losing
+        # the opportunity to add "language-*" classes, so we have to disable
+        # it.
         # it is garentreed to have been registered by mkdocs,
-        # so the slient option is not required
+        # so the slient option is not required in deregister()
         from markdown.extensions.codehilite import CodeHiliteExtension
-        codehilite = False
         for ext in self.registeredExtensions:
             if isinstance(ext, CodeHiliteExtension):
-                codehilite_found = True
+                # codehilite is found
                 break
         else:
             self.preprocessors.deregister('fenced_code_block')
@@ -419,6 +459,8 @@ class MarkdownInterop(markdown.Markdown):
             # document turns out to be empty
             if not self.lines:
                 self.lines.append('')
+
+        # returns resulted string if needed
         if concat:
             return '\n'.join(self.lines)
 

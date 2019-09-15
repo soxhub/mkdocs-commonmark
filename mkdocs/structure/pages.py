@@ -16,7 +16,7 @@ from mkdocs.structure.toc import get_toc
 from mkdocs.utils import meta, urlparse, urlunparse, urljoin, urlunquote, get_markdown_title, warning_filter
 
 from mistletoe import Document
-from mkdocs._mistletoe_interop import MarkdownInterop, ETreeRenderer
+from mkdocs._mistletoe_interop import MarkdownInterop, ETreeRenderer, DocumentLazy
 from markdown.util import etree
 
 log = logging.getLogger(__name__)
@@ -187,11 +187,15 @@ class Page(object):
             extensions=extensions,
             extension_configs=config['mdx_configs'] or {}
         )
+        preprocessed = md._run_preprocessors(self.markdown)
+
+        from mistletoe.block_token import _token_types
 
         with ETreeRenderer() as r:
-            preprocessed = md._run_preprocessors(self.markdown)
-            doc = r.render(Document(preprocessed)).getroot()
-
+            docl = DocumentLazy(preprocessed, root_tag=md.doc_tag)
+            docl.run_block(_token_types)
+            docl.run_inline()
+            doc = r.render(docl).getroot()
         self.content = md._convert_from_elem(doc)
 
         self.toc = get_toc(getattr(md, 'toc', ''))
