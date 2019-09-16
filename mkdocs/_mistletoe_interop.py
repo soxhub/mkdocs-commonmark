@@ -19,7 +19,7 @@ import markdown
 from markdown import util
 from markdown.util import etree, text_type, AtomicString
 
-from mistletoe import Document, span_token
+from mistletoe import Document, span_token, block_token
 from mistletoe.block_token import tokenize, _token_types
 from mistletoe.block_tokenizer import tokenize_block, make_tokens
 
@@ -68,10 +68,9 @@ class DocumentLazy(Document):
 
     def run_block(self, block_token_types):
         # wow, a mutable global variable, so impressive...
-        global _root_node
-        _root_node = self
+        block_token._root_node = self
         self._blocks = tokenize_block(self._lines, block_token_types)
-        _root_node = None
+        block_token._root_node = None
         return self._blocks
 
     def run_inline(self):
