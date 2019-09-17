@@ -190,11 +190,18 @@ class Page(object):
         preprocessed = md._run_preprocessors(self.markdown)
 
         from mistletoe.block_token import _token_types
+        from mistletoe.span_token import _token_types as _inline_token_types
 
         with ETreeRenderer() as r:
-            docl = DocumentLazy(preprocessed, root_tag=md.doc_tag)
-            docl.run_block(_token_types)
-            docl.run_inline()
+            docl = DocumentLazy(
+                preprocessed,
+                _token_types,
+                _inline_token_types,
+                root_tag=md.doc_tag)
+
+            docl.run_block()
+            docl.run_maketree()
+
             doc = r.render(docl).getroot()
         self.content = md._convert_from_elem(doc)
 

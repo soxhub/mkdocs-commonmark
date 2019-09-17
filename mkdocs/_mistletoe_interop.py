@@ -2,8 +2,10 @@
 HTML renderer for mistletoe.
 """
 
+import logging
 import re
 import sys
+from contextlib import contextmanager
 from itertools import chain
 from urllib.parse import quote
 from mistletoe.block_token import HTMLBlock
@@ -14,28 +16,35 @@ if sys.version_info < (3, 4):
 else:
     import html
 
-
 import markdown
 from markdown import util
 from markdown.util import etree, text_type, AtomicString
 
-from mistletoe import Document, span_token, block_token
+from mistletoe import (Document, block_tokenizer, block_token, span_token)
 from mistletoe.block_token import tokenize, _token_types
-from mistletoe.block_tokenizer import tokenize_block, make_tokens
+from . import _serializers
 
-
+logger = logging.getLogger(__name__)
 mistletoe_block_tokens = {x.__name__: x for x in _token_types}
 
 
-def splice(x):
-    # unfortunately, str is iterable
-    if (isinstance(x, util.text_type) or
-        # fortunately, Element is iterable but has no __iter__
-        getattr(x, '__iter__', None) is None):
-        yield x
-    else:
-        for t in x:
-            yield from splice(t)
+def print_registry(reg):
+    for n, p in reg._priority:
+        print('{:5.1f} {:18.18s}'.format(p, n), reg._data[n])
+
+
+def unsafe_wrap(text):
+    ''' Enclose the text within a special element to indicate its
+        text content should not be escaped when serializing.
+
+        A patched serializer should be used to handle this case.
+    '''
+    # Note that "True" is not serializable by most serializers,
+    # to guard against that the element itself is never rendered.
+    el = etree.Element('', unsafe=True)
+    el.text = text
+    return el
+
 
 def safe_concat(a, b):
     ''' to deal with cases when a is None '''
@@ -50,7 +59,7 @@ def splice(x):
     # unfortunately, str is iterable
     if (isinstance(x, text_type) or
         # fortunately, Element is iterable but has no __iter__
-        getattr(x, '__iter__', None) is None):
+        not hasattr(x, '__iter__')):
         yield x
     else:
         for t in x:
@@ -58,29 +67,47 @@ def splice(x):
 
 
 class DocumentLazy(Document):
-    def __init__(self, lines, *, root_tag='div'):
+    def __init__(self, lines, block_token_types, span_token_types, *, root_tag='div'):
         self.root_tag = root_tag
 
         if isinstance(lines, str):
             lines = lines.splitlines(keepends=True)
         self._lines = [line if line.endswith('\n') else '{}\n'.format(line) for line in lines]
+
+        self.block_token_types = block_token_types
+        self.span_token_types = span_token_types
+        span_token._root_node = None
+
         self.footnotes = {}
 
-    def run_block(self, block_token_types):
-        # wow, a mutable global variable, so impressive...
-        block_token._root_node = self
-        self._blocks = tokenize_block(self._lines, block_token_types)
-        block_token._root_node = None
+    @contextmanager
+    def set_state(self):
+        try:
+            # wow, a mutable global variable, so impressive...
+            self._old_tt_block = block_token._token_types
+            self._old_tt_span = span_token._token_types
+            block_token._root_node = self
+            span_token._root_node = self
+            yield self
+        finally:
+            block_token._root_node = None
+            span_token._root_node = None
+            block_token._token_types = self._old_tt_block
+            span_token._token_types = self._old_tt_span
+
+    def run_block(self):
+        with self.set_state():
+            self._blocks = block_tokenizer.tokenize_block(self._lines, block_token._token_types)
         return self._blocks
 
-    def run_inline(self):
+    def run_maketree(self):
         try:
             _blocks = self._blocks
         except KeyError:
             raise Exception('Should call run_block first')
-        span_token._root_node = self
-        self.children = make_tokens(_blocks)
-        span_token._root_node = None
+
+        with self.set_state():
+            self.children = block_tokenizer.make_tokens(_blocks)
         return self.children
 
 
@@ -238,11 +265,6 @@ class ETreeRenderer(BaseRenderer):
     def render_raw_text(self, token):
         return AtomicString(self.escape_html(token.content))
 
-    @staticmethod
-    def render_html_span(token):
-        # Not used at all???
-        return token.content
-
     def render_heading(self, token):
         el = etree.Element('h{}'.format(token.level))
         self.append_elems(el, self.render_inner(token))
@@ -263,10 +285,10 @@ class ETreeRenderer(BaseRenderer):
 
     def render_paragraph(self, token):
         if self._suppress_ptag_stack[-1]:
-            # FIXME: can I not returning a list here :( ?
-            return self.render_inner(token)
-
-        el = etree.Element('p')
+            # transclude
+            el = etree.Element('')
+        else:
+            el = etree.Element('p')
         return self.append_elems(el, self.render_inner(token))
 
     def render_block_code(self, token):
@@ -364,6 +386,15 @@ class ETreeRenderer(BaseRenderer):
 
         return self.append_elems(el, self.render_inner(token))
 
+    def render_document(self, token):
+        self.footnotes.update(token.footnotes)
+        # python-markdown recognizes and strips *this* hardcoded <div>
+        el = etree.Element(getattr(token, 'root_tag', 'div'))
+        self.append_elems(el, self.render_inner_join(token))
+        self.append_newline_inside(el)
+        elt = etree.ElementTree(el)
+        return elt
+
     @staticmethod
     def render_thematic_break(token):
         return etree.Element('hr')
@@ -378,17 +409,11 @@ class ETreeRenderer(BaseRenderer):
 
     @staticmethod
     def render_html_block(token):
-        # XXX?
-        return AtomicString(token.content)
+        return unsafe_wrap(AtomicString(token.content))
 
-    def render_document(self, token):
-        self.footnotes.update(token.footnotes)
-        # python-markdown recognizes and strips *this* hardcoded <div>
-        el = etree.Element(token.root_tag)
-        self.append_elems(el, self.render_inner_join(token))
-        self.append_newline_inside(el)
-        elt = etree.ElementTree(el)
-        return elt
+    @staticmethod
+    def render_html_span(token):
+        return unsafe_wrap(AtomicString(token.content))
 
     @staticmethod
     def escape_html(raw):
@@ -403,6 +428,14 @@ class ETreeRenderer(BaseRenderer):
 
 
 class MarkdownInterop(markdown.Markdown):
+    __first_run = False
+
+    # use our specialized serializer!
+    output_formats = {
+        'html':   _serializers.to_html_string,
+        'xhtml':  _serializers.to_xhtml_string,
+    }
+
     def __init__(self, **kwargs):
         super(MarkdownInterop, self).__init__(**kwargs)
         # XXX: change to allow only selected built-in pre-processors
@@ -421,6 +454,47 @@ class MarkdownInterop(markdown.Markdown):
                 break
         else:
             self.preprocessors.deregister('fenced_code_block')
+
+        # a list of built-in inline patterns.
+        # because intergrating mistletoe's footnote/reference (stored in a dict)
+        # is not as straightforward as using what Python-Markdown provides,
+        # the references are (redundantly) handled here.
+        disabling_inline_patterns = [
+            'backtick',
+            # escape
+            # reference
+            'link',
+            'image_link',
+            # image_reference, short_reference
+            'autolink',
+            'automail',
+            'linebreak',
+            'html',
+            'entity',
+            'not_strong',
+            'em_strong',
+            'em_strong2',
+        ]
+
+        for name in disabling_inline_patterns:
+            try:
+                self.inlinePatterns.deregister(name)
+            except ValueError:
+                if not self.__first_run:
+                    continue
+                logger.warn('Trying to disable a built-in inline pattern "%s", '
+                    'but it is already deregistered by some extension. '
+                    'Consider inspecting these extensions, as they '
+                    'may not work correctly.',
+                    name)
+
+        self.__first_run = True
+
+    @staticmethod
+    def _remove_stx_etx(line):
+        if util.STX not in line and util.ETX not in line:
+            return line
+        return line.replace(util.STX, '').replace(util.ETX, '')
 
     def _convert_to_elem(self, source):
         ''' Run the convert step until block parsing is done.
@@ -447,8 +521,7 @@ class MarkdownInterop(markdown.Markdown):
     def _run_preprocessors(self, source, concat=True):
         _lines = source.split("\n")
         # do our own normalization here
-        _lines = [l.replace(util.STX, '').replace(util.ETX, '')
-                  for l in _lines]
+        _lines = [self._remove_stx_etx(l) for l in _lines]
         self.lines = _lines
 
         for prep in self.preprocessors:
