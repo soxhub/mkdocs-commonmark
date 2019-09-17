@@ -285,11 +285,14 @@ class ETreeRenderer(BaseRenderer):
 
     def render_paragraph(self, token):
         if self._suppress_ptag_stack[-1]:
-            # transclude
-            el = etree.Element('')
+            # I would like to transclude here, but this changes
+            # the tree (e.g. breaks tasklist) and needs an extra
+            # run to transform them before tree processors
+            # take place.
+            return self.render_inner(token)
         else:
             el = etree.Element('p')
-        return self.append_elems(el, self.render_inner(token))
+            return self.append_elems(el, self.render_inner(token))
 
     def render_block_code(self, token):
         el_pre = etree.Element('pre')
@@ -413,7 +416,16 @@ class ETreeRenderer(BaseRenderer):
 
     @staticmethod
     def render_html_span(token):
-        return unsafe_wrap(AtomicString(token.content))
+        # intentionally let Python-Markdown handle this
+        # because its html parser is stronger!
+        #
+        # Example:
+        # # Hello <small>world</small>
+        # mistletoe: [Hello, <small>, world, </small>]
+        # PyMD:      [Hello, <small>world</small>]
+        # which result wrong TOC title generation, but I
+        # don't want to change that plugin myself
+        return AtomicString(token.content)
 
     @staticmethod
     def escape_html(raw):
@@ -469,7 +481,8 @@ class MarkdownInterop(markdown.Markdown):
             'autolink',
             'automail',
             'linebreak',
-            'html',
+            # mistletoe handling this results in tags in TOC!
+            # 'html',
             'entity',
             'not_strong',
             'em_strong',
