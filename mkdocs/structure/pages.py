@@ -189,14 +189,38 @@ class Page(object):
         )
         preprocessed = md._run_preprocessors(self.markdown)
 
-        from mistletoe.block_token import _token_types
+        from mistletoe.block_token import _token_types as _block_token_types
         from mistletoe.span_token import _token_types as _inline_token_types
+
+        from mistletoe.block_token import HTMLBlock
+        from mistletoe.span_token import HTMLSpan
+
+        from mkdocs._mistletoe_interop import mistletoe_span_tokens
+
+        picked_st = [
+            'EscapeSequence',
+            # 'Strikethrough',  # mistletoe issue #86, PR #87
+            'AutoLink',
+            'CoreTokens',
+            'InlineCode',
+            'LineBreak',
+            'RawText',
+        ]
+
+        my_inline_token_types = [mistletoe_span_tokens[x] for x in picked_st]
+
+        # these are added by renderer when initializing, we
+        # are replacing them later, so we have to insert them
+        # by ourselves.
+        # not knowing how to handle this better
+
+        my_inline_token_types.insert(0, HTMLSpan)
 
         with ETreeRenderer() as r:
             docl = DocumentLazy(
                 preprocessed,
-                _token_types,
-                _inline_token_types,
+                _block_token_types,
+                my_inline_token_types,
                 root_tag=md.doc_tag)
 
             docl.run_block()

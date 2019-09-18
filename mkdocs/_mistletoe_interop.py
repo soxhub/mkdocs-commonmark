@@ -21,11 +21,19 @@ from markdown import util
 from markdown.util import etree, text_type, AtomicString
 
 from mistletoe import (Document, block_tokenizer, block_token, span_token)
-from mistletoe.block_token import tokenize, _token_types
 from . import _serializers
 
 logger = logging.getLogger(__name__)
-mistletoe_block_tokens = {x.__name__: x for x in _token_types}
+mistletoe_block_tokens = {x.__name__: x for x in block_token._token_types}
+mistletoe_span_tokens = {x.__name__: x for x in span_token._token_types}
+
+
+# produce a list of built-in block processors in Python-Markdown
+_md_original = markdown.Markdown()
+pymd_builtin_blockprocessors = [
+    inst.__class__ for inst in
+    _md_original.parser.blockprocessors._data.values()]
+del _md_original
 
 
 def print_registry(reg):
@@ -84,16 +92,20 @@ class DocumentLazy(Document):
     def set_state(self):
         try:
             # wow, a mutable global variable, so impressive...
-            self._old_tt_block = block_token._token_types
-            self._old_tt_span = span_token._token_types
+            old_block = block_token._token_types
+            old_span = span_token._token_types
+
+            block_token._token_types = self.block_token_types
+            span_token._token_types = self.span_token_types
+
             block_token._root_node = self
             span_token._root_node = self
             yield self
         finally:
             block_token._root_node = None
             span_token._root_node = None
-            block_token._token_types = self._old_tt_block
-            span_token._token_types = self._old_tt_span
+            block_token._token_types = old_block
+            span_token._token_types = old_span
 
     def run_block(self):
         with self.set_state():
@@ -440,7 +452,7 @@ class ETreeRenderer(BaseRenderer):
 
 
 class MarkdownInterop(markdown.Markdown):
-    __first_run = False
+    __first_run = True
 
     # use our specialized serializer!
     output_formats = {
@@ -501,7 +513,23 @@ class MarkdownInterop(markdown.Markdown):
                     'may not work correctly.',
                     name)
 
-        self.__first_run = True
+        if self.__first_run:
+            bproc_ext_detected = False
+            for name, _ in self.parser.blockprocessors._priority:
+                inst = self.parser.blockprocessors._data[name].__class__
+                if inst in pymd_builtin_blockprocessors:
+                    continue
+                logger.warn('Detect a non-built-in block processor "%s" (%r).', name, inst)
+                bproc_ext_detected = True
+
+            if bproc_ext_detected:
+                logger.warn('Block processors of Python-Markdown are not supported '
+                    'in mkdocs-commonmark. If the feature is handled by mistletoe, '
+                    'then simply remove the corresponding extension. If not, '
+                    'consider re-implement these parts (probably the whole extension) '
+                    'in mistletoe as individual block tokens.')
+
+        MarkdownInterop.__first_run = False
 
     @staticmethod
     def _remove_stx_etx(line):
