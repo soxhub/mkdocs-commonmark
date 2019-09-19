@@ -84,7 +84,8 @@ class DocumentLazy(Document):
 
         self.block_token_types = block_token_types
         self.span_token_types = span_token_types
-        span_token._root_node = None
+
+        self.block_token_types.insert(0, Admonition)
 
         self.footnotes = {}
 
@@ -138,6 +139,7 @@ class ETreeRenderer(BaseRenderer):
         super().__init__(*chain((HTMLBlock, HTMLSpan), extras))
         self.render_map.update({
             'DocumentLazy': self.render_document,
+            'Admonition': Admonition.render_thunk(self),
         })
 
         # html.entities.html5 includes entitydefs not ending with ';',
@@ -606,3 +608,88 @@ class MarkdownInterop(markdown.Markdown):
             output = pp.run(output)
 
         return output.strip()
+
+
+class Admonition(block_token.BlockToken):
+    pattern = re.compile(r'(!!!|\?\?\?\+?) ?([\w\-]+(?: +[\w\-]+)*)(?: +"(.*?)")? *(?:\n|$)')
+
+    # FIXME: if the pattern does not appear at the beginning of a block,
+    # the block-tokenizer may consume the whole part as paragraph.
+    # needs a lean way to "interrupt" other blocks. (markdown-it has this design.)
+
+    def __init__(self, match):
+        indicator, label, title, parse_buffer = match
+        self.indicator = indicator
+        self.label = label
+        self.title = title
+        self.children = block_tokenizer.make_tokens(parse_buffer)
+
+    @classmethod
+    def start(cls, line):
+        match_obj = cls.pattern.match(line)
+        if match_obj is None:
+            return False
+
+        # determine title
+        cls.indicator = match_obj.group(1)
+        label = match_obj.group(2).lower()
+        _title = match_obj.group(3)
+
+        if _title is None:
+            title = label.split(' ', 1)[0].capitalize()
+        elif _title == '':
+            title = None
+        else:
+            title = _title
+
+        cls.label = label
+        cls.title = title
+
+        return True
+
+    @classmethod
+    def read(cls, lines):
+        # skip first line
+        next(lines)
+
+        linebuf = []
+
+        next_line = lines.peek()
+        while (next_line is not None
+               and (
+                next_line == '\n' or
+                next_line.startswith(' ' * 4))):
+
+            linebuf.append(next_line[4:])
+
+            next(lines)
+            next_line = lines.peek()
+
+        parse_buffer = block_tokenizer.tokenize_block(linebuf, block_token._token_types)
+
+        return cls.indicator, cls.label, cls.title, parse_buffer
+
+    @staticmethod
+    def render_thunk(renderer):
+        def render(token):
+            if token.indicator == '!!!':
+                el = etree.Element('div')
+                el.set('class', 'admonition {}'.format(token.label))
+                if token.title:
+                    el_title = etree.SubElement(el, 'p')
+                    el_title.set('class', 'admonition-title')
+                    el_title.text = token.title
+                return renderer.append_elems(el, renderer.render_inner(token))
+
+            else:
+                el = etree.Element('details')
+                el.set('class', token.label)
+                if token.indicator.endswith('+'):
+                    el.set('open', '')
+
+                el_title = etree.SubElement(el, 'summary')
+                el_title.text = token.title
+
+                return renderer.append_elems(el, renderer.render_inner(token))
+
+        return render
