@@ -29,7 +29,7 @@ mistletoe_span_tokens = {x.__name__: x for x in span_token._token_types}
 
 
 # produce a list of built-in block processors in Python-Markdown
-_md_original = markdown.Markdown()
+_md_original = markdown.Markdown(extensions=['tables'])
 pymd_builtin_blockprocessors = [
     inst.__class__ for inst in
     _md_original.parser.blockprocessors._data.values()]

@@ -3,7 +3,6 @@ import logging
 from urllib.parse import urlparse, urlunparse, urljoin
 from urllib.parse import unquote as urlunquote
 
-import markdown
 from markdown.extensions import Extension
 from markdown.treeprocessors import Treeprocessor
 from markdown.util import AMP_SUBSTITUTE
@@ -11,9 +10,7 @@ from markdown.util import AMP_SUBSTITUTE
 from mkdocs.structure.toc import get_toc
 from mkdocs.utils import meta, get_build_date, get_markdown_title, warning_filter
 
-from mistletoe import Document
 from mkdocs._mistletoe_interop import MarkdownInterop, ETreeRenderer, DocumentLazy
-from markdown.util import etree
 
 log = logging.getLogger(__name__)
 log.addFilter(warning_filter)
@@ -179,9 +176,7 @@ class Page:
         preprocessed = md._run_preprocessors(self.markdown)
 
         from mistletoe.block_token import _token_types as _block_token_types
-        from mistletoe.span_token import _token_types as _inline_token_types
 
-        from mistletoe.block_token import HTMLBlock
         from mistletoe.span_token import HTMLSpan
 
         from mkdocs._mistletoe_interop import mistletoe_span_tokens
