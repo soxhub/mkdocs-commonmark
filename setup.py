@@ -1,7 +1,5 @@
 #!/usr/bin/env python
-# -*- coding: utf-8 -*-
 
-from __future__ import print_function
 from setuptools import setup
 import re
 import os
@@ -57,14 +55,14 @@ setup(
     include_package_data=True,
     install_requires=[
         'click>=3.3',
-        'Jinja2>=2.7.1',
+        'Jinja2>=2.10.1',
         'livereload>=2.5.1',
-        'lunr[languages]>=0.5.2',
-        'Markdown>=2.3.1',
+        'lunr[languages]==0.5.8',  # must support lunr.js version included in search
+        'Markdown>=3.2.1',
         'PyYAML>=3.10',
         'tornado>=5.0'
     ],
-    python_requires='>=2.7.9,!=3.0.*,!=3.1.*,!=3.2.*,!=3.3.*',
+    python_requires='>=3.5',
     entry_points={
         'console_scripts': [
             'mkdocs = mkdocs.__main__:cli',
@@ -85,13 +83,11 @@ setup(
         'License :: OSI Approved :: BSD License',
         'Operating System :: OS Independent',
         'Programming Language :: Python',
-        'Programming Language :: Python :: 2',
-        'Programming Language :: Python :: 2.7',
         'Programming Language :: Python :: 3',
-        'Programming Language :: Python :: 3.4',
         'Programming Language :: Python :: 3.5',
         'Programming Language :: Python :: 3.6',
         'Programming Language :: Python :: 3.7',
+        'Programming Language :: Python :: 3 :: Only',
         "Programming Language :: Python :: Implementation :: CPython",
         "Programming Language :: Python :: Implementation :: PyPy",
         'Topic :: Documentation',
